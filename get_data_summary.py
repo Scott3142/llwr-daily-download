@@ -16,7 +16,7 @@ from selenium.webdriver.common.keys import Keys
 from googleapiclient.http import MediaFileUpload
 from google_auth import build_auth_service  # Ensure your auth script is named google_auth.py
 
-def get_data_summary():
+def get_data_summary(academic_year):
     # --- CONFIGURATION ---
     load_dotenv()
     USERNAME = os.getenv("PORTAL_USER")
@@ -71,7 +71,7 @@ def get_data_summary():
         Select(provider_dd).select_by_visible_text("Bridgend College (F0009004)")
         time.sleep(2)
 
-        Select(driver.find_element(By.ID, "reportViewer_ctl08_ctl05_ddValue")).select_by_visible_text("2025")
+        Select(driver.find_element(By.ID, "reportViewer_ctl08_ctl05_ddValue")).select_by_visible_text(academic_year)
         time.sleep(2) 
 
         Select(driver.find_element(By.ID, "reportViewer_ctl08_ctl07_ddValue")).select_by_visible_text("All")
@@ -79,16 +79,34 @@ def get_data_summary():
         # --- STEP 4: VIEW & EXPORT ---
         print("👀 Rendering report...")
         driver.find_element(By.ID, "reportViewer_ctl08_ctl00").click()
-        time.sleep(5) # Allow SSRS to process
-
+        
         # Snapshot existing CSV files before downloading
         existing_csvs = set(glob.glob(os.path.join(DOWNLOAD_DIR, "*.csv")))
 
         print("💾 Triggering CSV download...")
-        try:
-            driver.execute_script("$find('reportViewer').exportReport('CSV');")
-        except Exception as js_err:
-            print(f"⚠️ Export failed: {js_err}")
+        
+        # Implement a retry loop instead of a fixed time.sleep()
+        max_attempts = 20 # Will try for up to ~40 seconds
+        export_success = False
+        
+        for attempt in range(max_attempts):
+            try:
+                # Try to trigger the download
+                driver.execute_script("$find('reportViewer').exportReport('CSV');")
+                export_success = True
+                break # If successful, break out of the loop
+                
+            except Exception as js_err:
+                error_msg = str(js_err)
+                # If it's the specific SSRS loading error, wait and try again
+                if "being updated" in error_msg:
+                    time.sleep(2)
+                else:
+                    print(f"⚠️ Export failed with unexpected error: {error_msg}")
+                    break
+                    
+        if not export_success:
+            print("⚠️ Export failed: Report took too long to render or encountered a fatal error.")
             return
 
         # --- STEP 5: WAIT & RENAME FILE ---
@@ -127,13 +145,22 @@ def get_data_summary():
                 # Use your existing auth code to get the Drive service
                 drive_service = build_auth_service('drive')
                 
-                folder_id = '1f5GmoNA4CqJ8csagO3-y5l6835TRPkr2'
+                #folder_id = '1f5GmoNA4CqJ8csagO3-y5l6835TRPkr2'
+                folder_id_2025 = '1sJzKUn9kLm8JPhLr7y0SB4hUd9YyqATZ'
+                folder_id_2026 = '1Td-1x1rA2Qok3MCVRi5lo1IMdBnC6cph'
                 
                 # Define file metadata (name and parent folder)
-                file_metadata = {
-                    'name': new_filename,
-                    'parents': [folder_id]
-                }
+                match academic_year:
+                    case '2025':
+                        file_metadata = {
+                            'name': new_filename,
+                            'parents': [folder_id_2025]
+                        }
+                    case '2026':
+                        file_metadata = {
+                            'name': new_filename,
+                            'parents': [folder_id_2026]
+                        }
                 
                 # Point to the locally saved file
                 media = MediaFileUpload(new_file_path, mimetype='text/csv', resumable=True)
@@ -164,4 +191,5 @@ def get_data_summary():
         driver.quit()
 
 if __name__ == '__main__':
-    get_data_summary()
+    get_data_summary('2025')
+    get_data_summary('2026')
